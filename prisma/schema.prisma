@@ -1,0 +1,166 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./juridico.db"
+}
+
+// ─── ENUMS (como strings para compatibilidade SQLite) ───────────────────────────────────────────────
+
+// ─── DOMÍNIO: CASO ───────────────────────────────────────
+
+model Case {
+  id                String               @id @default(uuid())
+  title             String
+  status            String               @default("INTAKE")
+  cctInfo           String?              // JSON: { sindicato, cct, links[], vigencia }
+  notes             String?
+
+  authorId          String               @unique
+  defendantId       String               @unique
+  contractId        String?              @unique
+
+  author            Party                @relation("CaseAuthor",    fields: [authorId],    references: [id])
+  defendant         Party                @relation("CaseDefendant", fields: [defendantId], references: [id])
+  contract          Contract?            @relation(fields: [contractId], references: [id])
+
+  caseClaims        CaseClaim[]
+  caseBlocks        CaseBlock[]
+  specialSituations CaseSpecialSituation[]
+  reviewErrors      ReviewError[]
+
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+}
+
+// ─── DOMÍNIO: PARTES ─────────────────────────────────────
+
+model Party {
+  id         String  @id @default(uuid())
+  name       String
+  document   String? // CPF ou CNPJ
+  address    String?
+  role       String  // "AUTHOR" | "DEFENDANT"
+
+  caseAuthor    Case? @relation("CaseAuthor")
+  caseDefendant Case? @relation("CaseDefendant")
+}
+
+// ─── DOMÍNIO: CONTRATO ───────────────────────────────────
+
+model Contract {
+  id               String          @id @default(uuid())
+  admissionDate    DateTime
+  dismissalDate    DateTime?
+  resignationType  String?
+  baseSalary       Float
+  role             String
+  department       String?
+  journeyHours     Float           // Horas semanais contratadas
+  journeyString    String          // Descrição (ex: "08:00–18:00 c/ 1h intervalo")
+  hasNightWork     Boolean         @default(false)
+  hasBankOfHours   Boolean         @default(false)
+  cnae             String?
+  activitySector   String?
+  municipality     String?
+
+  case             Case?
+}
+
+// ─── DOMÍNIO: VERBAS (DICIONÁRIO MESTRE) ─────────────────
+
+model ClaimDictionary {
+  id            String      @id  // ex: "horas_extras"
+  name          String           // ex: "Horas extras"
+  shortDesc     String?
+  category      String           // "Remuneratória" | "Rescisória" | "Indenizatória" | "Multa"
+  pjeCalcImpact String?          // JSON: { tipoEvento, baseCalculo, periodo }
+
+  caseClaims    CaseClaim[]
+}
+
+model CaseClaim {
+  id        String          @id @default(uuid())
+  caseId    String
+  claimId   String
+
+  case      Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  claim     ClaimDictionary @relation(fields: [claimId], references: [id])
+
+  @@unique([caseId, claimId])
+}
+
+// ─── DOMÍNIO: SITUAÇÕES ESPECIAIS ────────────────────────
+
+model SpecialSituation {
+  id               String                 @id  // ex: "gestante"
+  name             String
+  description      String?
+  suggestedClaims  String                 // JSON: string[]
+  suggestedBlocks  String                 // JSON: string[] (ids de TemplateBlock)
+
+  cases            CaseSpecialSituation[]
+}
+
+model CaseSpecialSituation {
+  id          String           @id @default(uuid())
+  caseId      String
+  situationId String
+
+  case        Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  situation   SpecialSituation @relation(fields: [situationId], references: [id])
+
+  @@unique([caseId, situationId])
+}
+
+// ─── DOMÍNIO: BLOCOS ─────────────────────────────────────
+
+model TemplateBlock {
+  id             String      @id @default(uuid())
+  title          String
+  type           String
+  contentAST     String      // JSON do BlockNote
+  triggerClaims  String?     // JSON: string[] (ids de ClaimDictionary que sugerem este bloco)
+  status         String      @default("APPROVED") // "DRAFT" | "APPROVED"
+  version        Int         @default(1)
+  notes          String?
+
+  caseBlocks     CaseBlock[]
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+model CaseBlock {
+  id          String         @id @default(uuid())
+  caseId      String
+  templateId  String?
+  type        String
+  order       Int
+  contentAST  String         // Conteúdo editado e instanciado
+  origin      String    @default("MANUAL")
+
+  case        Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  template    TemplateBlock? @relation(fields: [templateId], references: [id])
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([caseId, order])
+}
+
+// ─── DOMÍNIO: ERROS DE REVISÃO ───────────────────────────
+
+model ReviewError {
+  id          String              @id @default(uuid())
+  caseId      String
+  category    String
+  description String
+  location    String              // "FATOS" | "FUNDAMENTO_X" | "PEDIDOS"
+
+  case        Case                @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime            @default(now())
+}
